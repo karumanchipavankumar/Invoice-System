@@ -1,0 +1,83 @@
+# ===================================================
+# APPLICATION CONFIGURATION
+# ===================================================
+
+# Server Configuration
+server.port=8080
+server.servlet.context-path=/
+
+# ===================================================
+# DATABASE CONFIGURATION
+# ===================================================
+
+# MongoDB Configuration
+spring.data.mongodb.uri=mongodb://localhost:27017/your_database_name
+spring.data.mongodb.auto-index-creation=true
+
+# ===================================================
+# EMAIL CONFIGURATION (Brevo)
+# ===================================================
+
+# Brevo SMTP Configuration
+spring.mail.host=smtp-relay.brevo.com
+spring.mail.port=587
+spring.mail.username=your_brevo_username
+spring.mail.password=your_brevo_password
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+
+# Brevo API Configuration
+brevo.api.key=your_brevo_api_key
+brevo.sender.email=your_sender_email@example.com
+brevo.sender.name=Your Sender Name
+
+# ===================================================
+# FILE UPLOAD CONFIGURATION
+# ===================================================
+
+# File Upload Directory (relative to application root)
+file.upload-dir=uploads
+
+# Maximum file size for uploads (10MB)
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=10MB
+
+# ===================================================
+# SECURITY CONFIGURATION
+# ===================================================
+
+# JWT Configuration
+jwt.secret=your_jwt_secret_key_here
+jwt.expiration=86400000  # 24 hours in milliseconds
+
+# CORS Configuration
+cors.allowed-origins=http://localhost:3000
+cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS
+cors.allowed-headers=*
+cors.allow-credentials=true
+
+# ===================================================
+# LOGGING CONFIGURATION
+# ===================================================
+
+logging.level.root=INFO
+logging.level.com.invoiceapp=DEBUG
+logging.file.name=logs/application.log
+logging.pattern.console=%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n
+
+# ===================================================
+# APPLICATION-SPECIFIC PROPERTIES
+# ===================================================
+
+# Add any additional application-specific properties below
+# Example:
+# app.name=Invoice Management System
+# app.version=1.0.0
+
+# ===================================================
+# NOTES FOR DEVELOPERS
+# ===================================================
+# 1. Copy this file to 'application.properties' in the same directory
+# 2. Replace all placeholder values (in UPPERCASE) with your actual configuration
+# 3. NEVER commit the actual 'application.properties' file to version control
+# 4. Keep your credentials secure and never share them publicly
