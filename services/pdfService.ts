@@ -52,7 +52,8 @@ const addTextToPdf = async (
                             adjustedY = y - height;
                         }
                         
-                        doc.addImage(imageData, 'PNG', adjustedX, adjustedY, maxWidth, height);
+                        // Add image with basic settings
+                        doc.addImage(imageData, 'PNG', adjustedX, adjustedY, maxWidth, height, '', 'FAST');
                         resolve();
                     };
                     img.onerror = () => {
@@ -145,8 +146,48 @@ const getTranslations = async (language: 'en' | 'ja') => {
     return t;
 };
 
-// Helper function to load logo image and add it to PDF
-const addLogoToPdf = async (doc: jsPDF, x: number, y: number, logoUrl: string | null | undefined, width: number = 50): Promise<void> => {
+// Helper function to optimize image data for PDF
+const optimizeImageForPdf = (canvas: HTMLCanvasElement, maxWidth: number, maxHeight: number): string => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+
+    // Calculate new dimensions maintaining aspect ratio
+    let width = canvas.width;
+    let height = canvas.height;
+    
+    if (width > maxWidth) {
+        const ratio = maxWidth / width;
+        width = maxWidth;
+        height = height * ratio;
+    }
+    
+    if (height > maxHeight) {
+        const ratio = maxHeight / height;
+        height = maxHeight;
+        width = width * ratio;
+    }
+    
+    // Create a new canvas with optimized dimensions
+    const optimizedCanvas = document.createElement('canvas');
+    optimizedCanvas.width = Math.floor(width);
+    optimizedCanvas.height = Math.floor(height);
+    const optimizedCtx = optimizedCanvas.getContext('2d');
+    
+    if (!optimizedCtx) return '';
+    
+    // Apply image smoothing for better quality when downscaling
+    optimizedCtx.imageSmoothingEnabled = true;
+    optimizedCtx.imageSmoothingQuality = 'high';
+    
+    // Draw the image to the optimized canvas
+    optimizedCtx.drawImage(canvas, 0, 0, optimizedCanvas.width, optimizedCanvas.height);
+    
+    // Convert to JPEG with quality 0.8 (80%) for better compression
+    return optimizedCanvas.toDataURL('image/jpeg', 0.8);
+};
+
+// Helper function to load logo image and add it to PDF with optimization
+const addLogoToPdf = async (doc: jsPDF, x: number, y: number, logoUrl: string | null | undefined, width: number = 40): Promise<void> => {
     return new Promise<void>((resolve) => {
         try {
             // Check if we're in a browser environment
@@ -163,10 +204,9 @@ const addLogoToPdf = async (doc: jsPDF, x: number, y: number, logoUrl: string | 
                 return;
             }
             
-            // Create an image element to load the image
             const img = new Image();
-            
             let resolved = false;
+            
             const finish = () => {
                 if (resolved) return;
                 resolved = true;
@@ -181,118 +221,87 @@ const addLogoToPdf = async (doc: jsPDF, x: number, y: number, logoUrl: string | 
             
             console.log('Loading logo from URL:', imageUrl);
             
-            // Set up load handler
             img.onload = () => {
                 try {
-                    // Wait a bit longer to ensure SVG is fully rendered and dimensions are available
-                    setTimeout(() => {
-                        try {
-                            // Ensure image is fully loaded with valid dimensions
-                            if (!img.complete) {
-                                console.warn('Image not complete');
-                                finish();
-                                return;
-                            }
-                            
-                            // For SVG, naturalWidth might be 0, so we'll use fallback dimensions
-                            const hasValidDimensions = img.naturalWidth > 0 && img.naturalHeight > 0;
-                            if (!hasValidDimensions) {
-                                console.log('SVG loaded but dimensions not available, using fallback dimensions');
-                            }
-                            
-                            // Create a canvas to convert SVG to image data that jsPDF can use
-                            const canvas = document.createElement('canvas');
-                            const ctx = canvas.getContext('2d');
-                            
-                            if (!ctx) {
-                                console.warn('Could not get canvas context for logo');
-                                finish();
-                                return;
-                            }
-                            
-                            // Set canvas size - use natural dimensions or fallback to known dimensions (320x70)
-                            const imgWidth = img.naturalWidth > 0 ? img.naturalWidth : 320;
-                            const imgHeight = img.naturalHeight > 0 ? img.naturalHeight : 70;
-                            
-                            // Ensure minimum dimensions
-                            const finalWidth = Math.max(imgWidth, 320);
-                            const finalHeight = Math.max(imgHeight, 70);
-                            
-                            canvas.width = finalWidth;
-                            canvas.height = finalHeight;
-                            
-                            // Clear canvas with white background (better for PDF)
-                            ctx.fillStyle = '#FFFFFF';
-                            ctx.fillRect(0, 0, canvas.width, canvas.height);
-                            
-                            // Draw the image to canvas (this converts SVG to raster)
-                            // If dimensions are 0, the browser will use the SVG's viewBox
-                            ctx.drawImage(img, 0, 0, finalWidth, finalHeight);
-                            
-                            // Convert canvas to data URL (PNG format)
-                            const imageData = canvas.toDataURL('image/png');
-                            
-                            if (!imageData || imageData === 'data:,') {
-                                console.warn('Failed to convert logo to data URL');
-                                finish();
-                                return;
-                            }
-                            
-                            // Calculate height maintaining aspect ratio (logo is 320x70)
-                            const aspectRatio = 320 / 70; // ~4.571
-                            const height = width / aspectRatio;
-                            
-                            // Add image to PDF using the data URL
-                            try {
-                                doc.addImage(imageData, 'PNG', x, y, width, height);
-                                console.log('Logo added to PDF successfully at position', x, y, 'size:', width, 'x', height.toFixed(2));
-                                finish();
-                            } catch (addError) {
-                                console.error('Error adding logo image to PDF:', addError);
-                                finish();
-                            }
-                        } catch (error) {
-                            console.error('Error processing logo in setTimeout:', error);
-                            finish();
-                        }
-                    }, 200); // Delay to ensure SVG is fully rendered and dimensions are calculated
+                    if (!img.complete) {
+                        console.warn('Image not complete');
+                        finish();
+                        return;
+                    }
+                    
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    if (!ctx) {
+                        console.warn('Could not get canvas context for logo');
+                        finish();
+                        return;
+                    }
+                    
+                    // Use natural dimensions or fallback to reasonable defaults
+                    const imgWidth = img.naturalWidth > 0 ? img.naturalWidth : 320;
+                    const imgHeight = img.naturalHeight > 0 ? img.naturalHeight : 70;
+                    
+                    // Set canvas size to actual image size
+                    canvas.width = imgWidth;
+                    canvas.height = imgHeight;
+                    
+                    // Fill with white background
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    // Draw the image to canvas
+                    ctx.drawImage(img, 0, 0, imgWidth, imgHeight);
+                    
+                    // Optimize the image (max 800x600 for logos is more than enough)
+                    const optimizedImageData = optimizeImageForPdf(canvas, 800, 600);
+                    
+                    if (!optimizedImageData) {
+                        console.warn('Failed to optimize logo');
+                        finish();
+                        return;
+                    }
+                    
+                    // Calculate height maintaining aspect ratio
+                    const aspectRatio = imgWidth / imgHeight;
+                    const height = width / aspectRatio;
+                    
+                    // Add optimized image to PDF
+                    try {
+                        // Use 'JPEG' format for better compression
+                        doc.addImage(optimizedImageData, 'JPEG', x, y, width, height);
+                        console.log(`Logo added to PDF at position (${x}, ${y}), size: ${width.toFixed(1)}x${height.toFixed(1)}`);
+                        finish();
+                    } catch (addError) {
+                        console.error('Error adding logo to PDF:', addError);
+                        finish();
+                    }
                 } catch (error) {
-                    console.error('Error in logo onload handler:', error);
+                    console.error('Error processing logo:', error);
                     finish();
                 }
             };
             
-            let retryCount = 0;
             img.onerror = (error) => {
-                console.error('Could not load logo image. URL:', imageUrl, 'Error:', error);
-                // Try without crossOrigin as fallback (only once)
-                if (retryCount === 0 && img.crossOrigin) {
-                    console.log('Retrying logo load without crossOrigin...');
-                    retryCount++;
-                    img.crossOrigin = '';
-                    img.src = imageUrl;
-                } else {
-                    finish();
-                }
+                console.error('Could not load logo image:', error);
+                finish();
             };
             
-            // Try with crossOrigin first (for external resources), but it might not be needed for local assets
-            // If it fails, onerror will retry without it
+            // Try with crossOrigin first
             img.crossOrigin = 'anonymous';
-            
-            // Set the image source
             img.src = imageUrl;
             
-            // Fallback timeout in case image doesn't load (5 seconds)
+            // Fallback timeout (reduced from 5s to 3s)
             setTimeout(() => {
                 if (!resolved && (!img.complete || img.naturalWidth === 0)) {
-                    console.warn('Logo image load timeout after 5 seconds. Complete:', img.complete, 'NaturalWidth:', img.naturalWidth);
+                    console.warn('Logo load timeout');
                     finish();
                 }
-            }, 5000);
+            }, 3000);
+            
         } catch (error) {
             console.error('Error setting up logo for PDF:', error);
-            resolve(); // Don't fail PDF generation if logo fails
+            resolve();
         }
     });
 };
@@ -842,7 +851,20 @@ export const generateInvoicePDF = async (invoice: Invoice, language: 'en' | 'ja'
     try {
         console.log('Starting PDF generation for invoice:', invoice.invoiceNumber, 'Language:', language);
         
-        const doc = new jsPDF();
+        // Initialize PDF with compression and optimization settings
+        const doc = new jsPDF({
+            compress: true,  // Enable compression
+            precision: 1,    // Reduce coordinate precision (smaller file size)
+            unit: 'mm',
+            format: 'a4'
+        });
+        
+        // Set document metadata for smaller size
+        doc.setProperties({
+            title: `Invoice ${invoice.invoiceNumber}`,
+            creator: 'Invoice Generator',
+            author: 'Invoice Generator'
+        });
         
         // Configure font support for Japanese if needed
         if (language === 'ja') {
@@ -1382,8 +1404,23 @@ export const generateInvoicePDF = async (invoice: Invoice, language: 'en' | 'ja'
             ? `請求書_${invoice.invoiceNumber}.pdf` 
             : `invoice_${invoice.invoiceNumber}.pdf`;
             
-        // Save the PDF - this triggers the browser download
-        doc.save(fileName);
+        // Simple save with proper MIME type
+        const pdfData = doc.output('blob');
+        const pdfUrl = URL.createObjectURL(pdfData);
+        
+        // Create a temporary link and trigger download
+        const link = document.createElement('a');
+        link.href = pdfUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        
+        // Cleanup
+        setTimeout(() => {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(pdfUrl);
+        }, 100);
+        
         console.log('PDF saved successfully:', fileName);
     } catch (error) {
         console.error('Error generating PDF:', error);

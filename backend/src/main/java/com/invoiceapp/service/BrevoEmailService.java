@@ -17,6 +17,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
@@ -24,6 +26,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.cos.COSName;
 
 @Service
 public class BrevoEmailService implements InitializingBean {
@@ -142,6 +150,8 @@ public class BrevoEmailService implements InitializingBean {
             throw new IllegalArgumentException("PDF content cannot be null or empty");
         }
         
+        logger.info("Original PDF size: {} KB", pdfBytes.length / 1024);
+        
         // Check if PDF needs compression
         byte[] finalPdfBytes = pdfBytes;
         if (pdfBytes.length > MAX_PDF_SIZE_BYTES) {
@@ -150,19 +160,29 @@ public class BrevoEmailService implements InitializingBean {
                 MAX_PDF_SIZE_BYTES / (1024 * 1024.0));
                 
             try {
-                // Simple compression by reducing image quality
-                // Note: For better compression, consider using a PDF compression library like PDFBox
-                finalPdfBytes = compressPdf(pdfBytes);
+                // First try standard compression
+                byte[] compressed = compressPdf(pdfBytes);
                 
-                if (finalPdfBytes.length > MAX_PDF_SIZE_BYTES) {
-                    // If still too large, save to server and send a download link
-                    logger.warn("Compressed PDF still too large ({} MB). Sending download link instead.", 
-                        finalPdfBytes.length / (1024 * 1024.0));
-                    sendEmailWithDownloadLink(invoice, finalPdfBytes);
+                // If still too large, try more aggressive compression
+                if (compressed.length > MAX_PDF_SIZE_BYTES) {
+                    logger.warn("Standard compression insufficient ({} KB), trying aggressive compression...", 
+                        compressed.length / 1024);
+                    compressed = compressPdfAggressive(pdfBytes);
+                }
+                
+                // If still too large, send download link
+                if (compressed.length > MAX_PDF_SIZE_BYTES) {
+                    logger.warn("Compressed PDF still too large ({} KB), sending download link instead", 
+                        compressed.length / 1024);
+                    sendEmailWithDownloadLink(invoice, compressed);
                     return;
                 }
+                
+                finalPdfBytes = compressed;
+                logger.info("Using compressed PDF of size: {} KB", finalPdfBytes.length / 1024);
+                
             } catch (Exception e) {
-                logger.error("Error compressing PDF, sending download link instead", e);
+                logger.error("Error during PDF compression, sending download link", e);
                 sendEmailWithDownloadLink(invoice, pdfBytes);
                 return;
             }
@@ -493,28 +513,96 @@ public class BrevoEmailService implements InitializingBean {
     }
     
     /**
-     * Compresses a PDF file to reduce its size
-     * Note: This is a basic implementation. For production, consider using a proper PDF compression library.
+     * Compresses a PDF file to reduce its size using PDFBox
+     * @param pdfBytes The PDF content as byte array
+     * @return Compressed PDF as byte array
      */
     private byte[] compressPdf(byte[] pdfBytes) {
-        try {
-            // In a real implementation, you would use a library like PDFBox or iText
-            // to properly compress the PDF. This is a placeholder that just returns the original bytes.
-            // For example, with PDFBox you could do:
-            // PDDocument document = PDDocument.load(pdfBytes);
-            // document.setAllSecurityToBeRemoved(true);
-            // ... compression settings ...
-            // ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            // document.save(baos);
-            // document.close();
-            // return baos.toByteArray();
+        try (PDDocument document = PDDocument.load(pdfBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             
-            logger.warn("Basic PDF compression is being used. Consider implementing proper PDF compression.");
-            return pdfBytes; // Return original for now
+            // Remove all security settings that might prevent optimization
+            document.setAllSecurityToBeRemoved(true);
+            
+            // Optimize PDF by compressing images and removing unnecessary objects
+            for (PDPage page : document.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources != null) {
+                    for (COSName xObjectName : resources.getXObjectNames()) {
+                        try {
+                            if (resources.isImageXObject(xObjectName)) {
+                                PDImageXObject image = (PDImageXObject) resources.getXObject(xObjectName);
+                                // Apply compression to images
+                                image.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
+                                image.getCOSObject().setInt(COSName.BITS_PER_COMPONENT, 8);
+                            }
+                        } catch (Exception e) {
+                            logger.warn("Error optimizing image in PDF", e);
+                            // Continue with next image
+                        }
+                    }
+                }
+            }
+            
+            // Save with compression
+            document.save(baos);
+            byte[] compressed = baos.toByteArray();
+            
+            logger.info("PDF compressed from {} KB to {} KB ({}% reduction)", 
+                pdfBytes.length / 1024, 
+                compressed.length / 1024,
+                (int)(100 - ((float)compressed.length / pdfBytes.length * 100)));
+                
+            return compressed;
             
         } catch (Exception e) {
-            logger.error("Error compressing PDF", e);
-            throw new RuntimeException("Failed to compress PDF", e);
+            logger.error("Error compressing PDF, returning original", e);
+            return pdfBytes; // Return original if compression fails
+        }
+    }
+    
+    /**
+     * More aggressive PDF compression with reduced image quality
+     */
+    private byte[] compressPdfAggressive(byte[] pdfBytes) {
+        try (PDDocument document = PDDocument.load(pdfBytes);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            
+            document.setAllSecurityToBeRemoved(true);
+            
+            // More aggressive settings
+            for (PDPage page : document.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources != null) {
+                    for (COSName xObjectName : resources.getXObjectNames()) {
+                        try {
+                            if (resources.isImageXObject(xObjectName)) {
+                                PDImageXObject image = (PDImageXObject) resources.getXObject(xObjectName);
+                                // More aggressive compression
+                                image.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
+                                image.getCOSObject().setInt(COSName.BITS_PER_COMPONENT, 4); // Reduced color depth
+                            }
+                        } catch (Exception e) {
+                            logger.warn("Error optimizing image in aggressive compression", e);
+                        }
+                    }
+                }
+            }
+            
+            // Save with compression
+            document.save(baos);
+            byte[] compressed = baos.toByteArray();
+            
+            logger.info("Aggressive PDF compression: {} KB to {} KB ({}% reduction)", 
+                pdfBytes.length / 1024, 
+                compressed.length / 1024,
+                (int)(100 - ((float)compressed.length / pdfBytes.length * 100)));
+                
+            return compressed;
+            
+        } catch (Exception e) {
+            logger.error("Error in aggressive PDF compression, returning original", e);
+            return pdfBytes;
         }
     }
     
